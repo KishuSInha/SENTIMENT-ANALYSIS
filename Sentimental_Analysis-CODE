@@ -1,0 +1,211 @@
+# !pip install -U tensorflow scikit-learn nltk matplotlib seaborn wordcloud textblob yellowbrick
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import re
+import nltk
+import tensorflow as tf
+from nltk.corpus import stopwords
+from nltk.stem import PorterStemmer
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Embedding, LSTM, SpatialDropout1D, Bidirectional, Dropout
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.callbacks import EarlyStopping
+from google.colab import files
+from sklearn.cluster import KMeans
+from wordcloud import WordCloud
+import warnings
+
+# Ignore warnings for cleaner output
+warnings.filterwarnings('ignore')
+
+# Upload the Restaurant_Reviews.tsv file
+uploaded = files.upload()
+
+# Load the dataset (fixed filename issue)
+df = pd.read_csv('Restaurant_Reviews .tsv', delimiter="\t")
+print(df.head())
+
+# Creating the copy of dataset.
+df =df.copy()
+
+# Dataset First Look.
+
+df.head()
+# Dataset Rows & Columns count
+print(f' We have total {df.shape[0]} rows and {df.shape[1]} columns.')
+
+# Dataset Info.
+df.info()
+
+# Dataset Duplicate Value Count.
+df.duplicated(keep='last').sum()
+
+# Resting Index.
+df.reset_index(inplace=True)
+
+# Checking duplicate reviews in the 'Review' column
+df['Review'].duplicated().sum()
+
+# Missing values in 'Review' column
+df['Review'].isnull().sum()
+
+# Checking for Null values.
+df[df['Review'].isnull()].head()
+print(df.columns)
+
+
+# Download necessary NLTK resources
+nltk.download('stopwords')
+nltk.download('punkt')  # Ensure punkt tokenizer is downloaded
+nltk.download('punkt_tab')  # If punkt_tab specifically is the missing resource
+
+# Initialize the stemmer and stopwords
+ps = PorterStemmer()
+stop_words = set(stopwords.words('english'))
+
+# Function to clean and preprocess the text
+def clean_text(text):
+    # Remove non-alphabetical characters
+    text = re.sub(r'[^a-zA-Z\s]', '', text)
+    # Convert text to lowercase
+    text = text.lower()
+    # Tokenize the text
+    words = nltk.word_tokenize(text)  # This will now use the 'punkt' resource
+    # Remove stopwords and stem words
+    words = [ps.stem(word) for word in words if word not in stop_words]
+    return " ".join(words)
+
+# Apply the cleaning function to the review column
+df['cleaned_review'] = df['Review'].apply(clean_text)
+
+# Map sentiment labels from 1/0 to 'Positive'/'Negative'
+df['Sentiment'] = df['Liked'].map({1: 'Positive', 0: 'Negative'})
+
+# Define X and y
+X = df['cleaned_review']
+y = df['Liked']  # 1 for Positive, 0 for Negative
+
+# Split the data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# TF-IDF Vectorization (optional, as you're using Tokenizer)
+#TEST TRAIN SPLIT METHOD
+tfidf = TfidfVectorizer(max_features=5000)
+X_train_tfidf = tfidf.fit_transform(X_train)
+X_test_tfidf = tfidf.transform(X_test)
+
+# Parameters for padding and tokenization
+max_words =2000  # Vocabulary size
+max_len = 150     # Max length of input sequences
+
+# Tokenization and padding
+tokenizer = tf.keras.preprocessing.text.Tokenizer(num_words=max_words, lower=True, split=' ')
+tokenizer.fit_on_texts(X_train.tolist())  # Convert to list for tokenizer
+
+X_train_seq = tokenizer.texts_to_sequences(X_train.tolist())
+X_test_seq = tokenizer.texts_to_sequences(X_test.tolist())
+
+X_train_pad = pad_sequences(X_train_seq, maxlen=max_len)
+X_test_pad = pad_sequences(X_test_seq, maxlen=max_len)
+
+# Build the Bidrectional model
+model = Sequential()
+model.add(Embedding(max_words, 128, input_length=max_len))
+model.add(SpatialDropout1D(0.3))
+model.add(LSTM(100, return_sequences=True))  # LSTM layer
+model.add(Dropout(0.3))  # Regular dropout
+model.add(LSTM(50))      # Another LSTM layer
+model.add(Dropout(0.3))  # Regular dropout
+model.add(Dense(1, activation='sigmoid'))  # Output layer
+
+
+# Compile the model
+model.compile(loss='binary_crossentropy', optimizer=tf.keras.optimizers.Adam(learning_rate=0.001), metrics=['accuracy'])
+
+# Early stopping callback
+early_stopping = EarlyStopping(monitor='val_loss',mode ='min', patience=5, restore_best_weights=True,verbose=1)
+
+# Train the model
+history = model.fit(
+    X_train_pad, y_train,
+    epochs=25,
+    batch_size=128,
+    validation_data=(X_test_pad, y_test),
+    callbacks=[early_stopping]  # Added early stopping
+)
+
+# Evaluate the model
+y_pred = (model.predict(X_test_pad) > 0.5).astype("int32")
+print(f"Accuracy: {accuracy_score(y_test, y_pred)}")
+print(f"Classification Report:\n{classification_report(y_test, y_pred)}")
+print(f"Confusion Matrix:\n{confusion_matrix(y_test, y_pred)}")
+
+
+# Word cloud for positive reviews.
+print("WORD CLOUD FOR POSITIVE REVIEWS:")
+print()
+pos_rev =df[df['Liked'] == 1]
+
+long_string = ','.join(list(pos_rev['Review'].values))
+wordcloud = WordCloud(background_color="white", max_words=100, contour_width=3, contour_color='steelblue').generate(long_string)
+
+# Display the word cloud
+plt.figure(figsize=(10,10))
+plt.imshow(wordcloud, interpolation='bilinear')
+plt.axis('off')  # Hide the axis
+plt.show()
+
+#Word cloud for negative reviews
+print("WORD CLOUD FOR NEGATIVE REVIEWS: ")
+print()
+neg_rev = df[df['Sentiment'] == 'Negative']  # or use df[df['Liked'] == 0] for numeric labels
+
+# Generate a long string from the negative reviews for word cloud
+long_string = ','.join(list(neg_rev['Review'].values))
+long_string
+
+wordcloud = WordCloud(background_color="white", max_words=100, contour_width=3, contour_color='steelblue').generate(long_string)
+
+# Display the word cloud
+plt.figure(figsize=(10,10))
+plt.imshow(wordcloud, interpolation='bilinear')
+plt.axis('off')  # Hide the axis
+plt.show()
+     
+
+# Apply TF-IDF vectorization to convert text reviews into numerical features
+tfidf = TfidfVectorizer(max_features=5000)
+X_tfidf = tfidf.fit_transform(df['cleaned_review'])
+
+# Create a list of inertia scores for different numbers of clusters
+scores = [KMeans(n_clusters=i+2, random_state=11).fit(X_tfidf).inertia_ 
+          for i in range(8)]
+
+# Create a line plot of inertia scores versus number of clusters
+print("LINE PLOT FOR INERTIA SCORES VERSUS NUMBER OF CLUSTERS :")
+print()
+plt.figure(figsize=(7,7))
+sns.lineplot(x=np.arange(2, 10), y=scores)
+plt.xlabel('Number of clusters')
+plt.ylabel('Inertia')
+plt.title('Inertia of k-Means versus number of clusters')
+plt.show()
+
+# Plot training & validation accuracy
+print("TRAINING AND VALIDATION ACCURACY: ")
+print()
+plt.figure(figsize=(8, 6))
+plt.plot(history.history['accuracy'], label='Training Accuracy')
+plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
+plt.title('Training and Validation Accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.grid(True)
+plt.show()
